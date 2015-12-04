@@ -10,32 +10,41 @@ import argparse
 import sys
 import os
 import pygraphviz as pgv
-
+import numpy as np
+import logging as log
 
 #TODO
 #verbosity
 #Date
-
 
 def _setup_argparse():
     '''It prepares the command line argument parsing'''
 
     desc = ('This script creates a network graph given some items and their ' +
             'relationships')
-    parser = argparse.ArgumentParser(description=desc)
+    parser = argparse.ArgumentParser(description=desc,
+                        formatter_class=argparse.ArgumentDefaultsHelpFormatter)
 
-    parser.add_argument('-i','--input', dest='input_fpath',
+    parser.add_argument('-i','--input', dest='input_fpath', required=True,
                         help='input file path')
     parser.add_argument('-o','--output', dest='output_fpath',
-                        help='output file path')
+                        default='./output.png', help='output file path')
 #    parser.add_argument('-t','--threshold', dest='threshold',
 #                        help='threshold for relationship representation',
 #                        default='0.0442')
     parser.add_argument('-v', '--verbose', dest='verbosity',
                         help='increase output verbosity', action='store_true')
-    parser.add_argument('-r', '--ranges', dest='ranges',
-                        help='', default='0:0.5:0.0442,0.0884,0.177,0.354')
-
+    parser.add_argument('-l', '--limits', dest='limits', type=str,
+                        default='I:0:0.5:0.0442,0.0884,0.177,0.354',
+                        help=('If weights of the relationships are provided,' +
+                              ' those weights located between the same limits' + 
+                              ' will be represented with the same format.' + 
+                              ' Limits should be introduced as range' + 
+                              ' ("R:min:max:step") or as breakpoints' + 
+                              ' ("L:min:max:breakpoints"). e.g. "R:0:10:2"' +
+                              ' returns "[0,2,4,6,8]" (maximum value is not' +
+                              ' included) and "L:0:10:2,4,6,8" returns' +
+                              ' "[0,2,4,6,8,10]"'))
     #TODO
     #Attributes file
 
@@ -47,23 +56,31 @@ def _get_options():
     '''It checks arguments values'''
     args = _setup_argparse()
 
-    # Checking if input file exists
-    if not args.input_fpath:
-        raise IOError('Input file path must be provided.')
+    # Setting up logging system
+    if args.verbosity:
+        log.basicConfig(format="[%(levelname)s] %(message)s", level=log.DEBUG)
+    else:
+        log.basicConfig(format="[%(levelname)s] %(message)s", level=log.ERROR)
+
+    # Checking if input file is provided
     if not os.path.isfile(args.input_fpath):
         raise IOError('Input file does not exist. Check path.')
 
-    # Checking if output folder exists
-    if not args.output_fpath:
-        raise IOError('Output folder path must be provided.')
-    if not os.path.isdir(args.output_fpath):
+    # Checking if output file is provided
+    if os.path.isdir(args.output_fpath):
+        raise IOError('Output file name must be provided.')
+    if not os.path.isdir(os.path.dirname(args.output_fpath)):
         raise IOError('Output folder does not exist. Check path.')
 
     # Checking if ranges are well formatted
     try:
-        assert len(args.ranges.split(':')) == 3
+        split_ranges = args.limits.split(':')
+        assert (len(split_ranges) == 4 and
+                (split_ranges[0] == 'I' or split_ranges[0] == 'R'))
     except:
-        raise ValueError('Ranges should be introduced as "min:max:breakpoints"')
+        raise ValueError('Limits should be introduced as "R:min:max:step" or ' +
+                         '"L:min:max:breakpoints". e.g. "R:0:10:1" or ' + 
+                         '"L:0:10:2,4,6,8". See help.')
 
     return args
 
@@ -119,59 +136,76 @@ def file_parser(fpath):
 
     return relationships
 
+def parse_limits(limits):
+    '''XXX'''
 
-def create_graph(relationships, ranges):
+    kind, minimum, maximum, breakpoints = limits.split(':')
+    minimum = float(minimum)
+    maximum = float(maximum)
+    breakpoints_split = map(float, breakpoints.split(','))
+
+    try:
+        assert minimum < maximum
+    except:
+        raise ValueError('Max limit must be higher than min limit')
+
+    if kind == 'R':
+        try:
+            assert breakpoints_split[0] < (maximum - minimum)
+        except:
+            raise ValueError('Step must be lower than (max_limit - min_limit)')
+
+    if kind == 'I':
+        try:
+            for num in breakpoints_split:
+                assert minimum < num < maximum
+        except:
+            raise ValueError('Breakpoints must be between max and min limits')
+
+    # Getting ranges
+    if kind == 'R':
+        limits = list(np.unique(np.arange(minimum, maximum, breakpoints_split[0])))
+    elif kind == 'I':
+        limits = list(np.unique([minimum] + breakpoints_split + [maximum]))
+
+    return limits
+
+def create_graph(relationships, limits):
     '''Creates the network graph'''
 
+    # Setting up graph format
     G = pgv.AGraph(relationships,
                    strict = False,
                    #directed = True,
                    overlap = False, # Avoid overlapping nodes
                    splines = True) # Curvy edges
 
+    # Getting weight thresholds to set up edges thickness
+    if limits:
+        limits = np.array(parse_limits(limits))
+        log.debug('Limits provided: ' + str(list(limits)))
 
-    # Getting weight thresholds
-#    if ranges:
-#        minimum, maximum, breakpoints = ranges.split(':')
-#        minimum = int(minimum)
-#        maximum = int(maximum)
-#        breakpoints_split = map(int, breakpoints.split(','))
-#        if len(breakpoints_split) == 1:
-#            limits = range(minimum, maximum + 1, breakpoints_split[0])
-#        else:
-#            limits = [minimum]
-#            limits.extend(breakpoints_split)
-#            limits.extend([maximum])
-#        print limits
-#    
-#    
-#        try:
-#            assert minimum < maximum
-#        except:
-#            raise ValueError('Max limit must be higher than min limit')
-#    
-#        try:
-#            for num in limits[1:-1]:
-#                assert minimum < num < maximum
-#        except:
-#            raise ValueError('Breakpoints must be between max and min limits')
-        
+        # Getting midpoints of limits intervals
+        midpoints = (np.array(limits[1:]) + np.array(limits[:-1])) / 2
+        log.debug('Limits midpoints: ' + str(list(midpoints)))
 
-
-
+    # Creating relationships
     for item_a, item_b in relationships.items():
         for item_b, weight in item_b.items():
-            if not weight:
-                break
+            if weight:
+                edge = G.get_edge(item_a, item_b)
 
+                # Getting the nearest midpoint
+                index = (np.abs(midpoints-float(weight))).argmin()
 
-            
+                edge_width = np.linspace(1, 5, num=len(midpoints), endpoint=True)[index]
 
+                log.debug('Edge info: [item_a: ' + item_a + ', item_b: ' + item_b + ', weight: ' + weight + ', interval: ' + str(index) + ', edge_width: ' + str(edge_width) + ']')
 
-
-            edge = G.get_edge(item_a, item_b)
-            edge.attr['penwidth'] = float(weight)*10
-            edge.attr['len'] = 1
+                # Formatting edge
+                edge.attr['penwidth'] = edge_width
+                edge.attr['label'] = weight
+                edge.attr['len'] = 1
 
 
 #            edge.attr['color'] = 'green'
@@ -179,8 +213,8 @@ def create_graph(relationships, ranges):
 
 
 #    G.layout(prog = 'fdp')
-#    G.layout(prog = 'dot')
-    G.layout(prog = 'circo')
+    G.layout(prog = 'dot')
+#    G.layout(prog = 'circo')
 
     return G
 
@@ -194,16 +228,17 @@ def main():
     # Parsing options
     options = _get_options()
     if options.verbosity:
-        print '[START]: "' + get_time() + '"'
-        print 'Options parsed: ' + str(options)
+        log.info('START "' + get_time() + '"')
+#        print 'Options parsed: ' + str(options)
+        log.debug('Options parsed: ' + str(options))
 
     # Parsing input file
     relationships = file_parser(options.input_fpath)
     if options.verbosity:
-        print 'Relationships parsed: ' + str(relationships)
+        log.debug('Relationships parsed: ' + str(relationships))
     
     # Creating graph
-    G = create_graph(relationships, options.ranges)
+    G = create_graph(relationships, options.limits)
 
 
     #TODO
@@ -214,12 +249,15 @@ def main():
     # Writing output
     # EAFP - Easier to ask for forgiveness than permission.
     try:
-        G.draw('./file1.png')
+        if options.output_fpath.endswith('.png'):
+            G.draw(options.output_fpath)
+        else:
+            G.draw(options.output_fpath + '.png')
     except:
         raise IOError('Unable to write output file. Check permissions.')
 
     if options.verbosity:
-        print '[END]: "' + get_time() + '"'
+        log.info('END "' + get_time() + '"')
 
 if __name__ == '__main__':
     main()
