@@ -12,10 +12,11 @@ import os
 import pygraphviz as pgv
 import numpy as np
 import logging as log
+import colorsys
 
-#TODO
-#verbosity
-#Date
+_EDGE_MIN_WIDTH = 1
+_EDGE_MAX_WIDTH = 5
+
 
 def _setup_argparse():
     '''It prepares the command line argument parsing'''
@@ -29,11 +30,14 @@ def _setup_argparse():
                         help='input file path')
     parser.add_argument('-o','--output', dest='output_fpath',
                         default='./output.png', help='output file path')
-#    parser.add_argument('-t','--threshold', dest='threshold',
-#                        help='threshold for relationship representation',
-#                        default='0.0442')
+    parser.add_argument('-t','--threshold', dest='threshold',
+                        help='weight threshold for relationship representation',
+                        default='0.0442')
     parser.add_argument('-v', '--verbose', dest='verbosity',
                         help='increase output verbosity', action='store_true')
+    parser.add_argument('-c', '--color', dest='color',
+                        help='colour edges depending on its weight',
+                        action='store_true')
     parser.add_argument('-l', '--limits', dest='limits', type=str,
                         default='I:0:0.5:0.0442,0.0884,0.177,0.354',
                         help=('If weights of the relationships are provided,' +
@@ -136,6 +140,22 @@ def file_parser(fpath):
 
     return relationships
 
+
+def _filter_by_weight(relationships, threshold):
+    '''Filter relationship dict by weight threshold'''
+    for item_a, item_b in relationships.items():
+        for item_b, weight in item_b.items():
+            if weight:
+                if weight < threshold:
+                    relationships[item_a].pop(item_b)
+    for key in relationships.keys():
+        if not relationships[key]:
+            relationships.pop(key)
+    log.debug('Relationships filtered by threshold: "' +
+              str(relationships) + '"')
+    return relationships
+
+
 def parse_limits(limits):
     '''XXX'''
 
@@ -164,13 +184,29 @@ def parse_limits(limits):
 
     # Getting ranges
     if kind == 'R':
-        limits = list(np.unique(np.arange(minimum, maximum, breakpoints_split[0])))
+        limits = list(np.unique(np.arange(minimum, maximum,
+                                          breakpoints_split[0])))
     elif kind == 'I':
         limits = list(np.unique([minimum] + breakpoints_split + [maximum]))
 
     return limits
 
-def create_graph(relationships, limits):
+
+def pseudocolor(val, minval=_EDGE_MIN_WIDTH, maxval=_EDGE_MAX_WIDTH):
+    '''Given a range and a value, a color between red..yellow..green is returned
+[NOTE]: stackoverflow.com/questions/10901085/range-values-to-pseudocolor'''
+    # convert val in range minval..maxval to the range 0..120 degrees which
+    # correspond to the colors red..green in the HSV colorspace
+    h = (float(val-minval) / (maxval-minval)) * 120
+    # convert hsv color (h,1,1) to its rgb equivalent
+    # [NOTE]: hsv_to_rgb() function expects h to be 0..1 not 0..360
+    r, g, b = colorsys.hsv_to_rgb(h/360, 1., 1.)
+    # returning RGB in range 0..255
+    rgb_hex = '#%02x%02x%02x' % (r*255, g*255, b*255)
+    return rgb_hex
+
+
+def create_graph(relationships, limits, color):
     '''Creates the network graph'''
 
     # Setting up graph format
@@ -183,11 +219,11 @@ def create_graph(relationships, limits):
     # Getting weight thresholds to set up edges thickness
     if limits:
         limits = np.array(parse_limits(limits))
-        log.debug('Limits provided: ' + str(list(limits)))
+        log.debug('Limits provided: "' + str(list(limits)) + '"')
 
         # Getting midpoints of limits intervals
         midpoints = (np.array(limits[1:]) + np.array(limits[:-1])) / 2
-        log.debug('Limits midpoints: ' + str(list(midpoints)))
+        log.debug('Limits midpoints: "' + str(list(midpoints)) + '"')
 
     # Creating relationships
     for item_a, item_b in relationships.items():
@@ -198,18 +234,23 @@ def create_graph(relationships, limits):
                 # Getting the nearest midpoint
                 index = (np.abs(midpoints-float(weight))).argmin()
 
-                edge_width = np.linspace(1, 5, num=len(midpoints), endpoint=True)[index]
+                edge_width = np.linspace(_EDGE_MIN_WIDTH, _EDGE_MAX_WIDTH,
+                                         num=len(midpoints),
+                                         endpoint=True)[index]
 
-                log.debug('Edge info: [item_a: ' + item_a + ', item_b: ' + item_b + ', weight: ' + weight + ', interval: ' + str(index) + ', edge_width: ' + str(edge_width) + ']')
+                log.debug('Edge info: [item_a: "' + item_a +
+                          '", item_b: "' + item_b +
+                          '", weight: "' + weight + 
+                          '", interval: "' + str(index) +
+                          '", edge_width: "' + str(edge_width) + '"]')
 
                 # Formatting edge
                 edge.attr['penwidth'] = edge_width
                 edge.attr['label'] = weight
                 edge.attr['len'] = 1
 
-
-#            edge.attr['color'] = 'green'
-
+                if color:
+                    edge.attr['color'] = pseudocolor(edge_width)
 
 
 #    G.layout(prog = 'fdp')
@@ -222,6 +263,7 @@ def create_graph(relationships, limits):
 def get_time():
     return time.strftime("%Y-%m-%d")
 
+
 def main():
     '''The main function'''
 
@@ -230,15 +272,19 @@ def main():
     if options.verbosity:
         log.info('START "' + get_time() + '"')
 #        print 'Options parsed: ' + str(options)
-        log.debug('Options parsed: ' + str(options))
+        log.debug('Options parsed: "' + str(options) + '"')
 
     # Parsing input file
     relationships = file_parser(options.input_fpath)
     if options.verbosity:
-        log.debug('Relationships parsed: ' + str(relationships))
+        log.debug('Relationships parsed: "' + str(relationships) + '"')
     
+
+    # Applying threshold if necessary
+    relationships = _filter_by_weight(relationships, options.threshold)
+
     # Creating graph
-    G = create_graph(relationships, options.limits)
+    G = create_graph(relationships, options.limits, options.color)
 
 
     #TODO
@@ -258,6 +304,7 @@ def main():
 
     if options.verbosity:
         log.info('END "' + get_time() + '"')
+
 
 if __name__ == '__main__':
     main()
