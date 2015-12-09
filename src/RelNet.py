@@ -36,8 +36,10 @@ def _setup_argparse():
     parser.add_argument('-v', '--verbose', dest='verbosity',
                         help='increase output verbosity', action='store_true')
     parser.add_argument('-c', '--color', dest='color',
-                        help='colour edges depending on its weight',
-                        action='store_true')
+                        help=('colour edges depending on its weight' + 
+                              ' ("rg" for red..green scale;' +
+                              ' "bw" for black..white scale)'),
+                              default="rg", type=str, choices=["rg", "bw"])
     parser.add_argument('-l', '--limits', dest='limits', type=str,
                         default='I:0:0.5:0.0442,0.0884,0.177,0.354',
                         help=('If weights of the relationships are provided,' +
@@ -192,15 +194,26 @@ def parse_limits(limits):
     return limits
 
 
-def pseudocolor(val, minval=_EDGE_MIN_WIDTH, maxval=_EDGE_MAX_WIDTH):
+def pseudocolor(val, color, minval=_EDGE_MIN_WIDTH, maxval=_EDGE_MAX_WIDTH):
     '''Given a range and a value, a color between red..yellow..green is returned
 [NOTE]: stackoverflow.com/questions/10901085/range-values-to-pseudocolor'''
-    # convert val in range minval..maxval to the range 0..120 degrees which
-    # correspond to the colors red..green in the HSV colorspace
-    h = (float(val-minval) / (maxval-minval)) * 120
-    # convert hsv color (h,1,1) to its rgb equivalent
-    # [NOTE]: hsv_to_rgb() function expects h to be 0..1 not 0..360
-    r, g, b = colorsys.hsv_to_rgb(h/360, 1., 1.)
+    if color == 'rg':
+        # convert val in range minval..maxval to the range 0..120 degrees which
+        # correspond to the colors red..green in the HSV colorspace
+        h = (float(val-minval) / (maxval-minval)) * 120
+        # convert hsv color (h,1,1) to its rgb equivalent
+        # [NOTE]: hsv_to_rgb() function expects h to be 0..1 not 0..360
+        r, g, b = colorsys.hsv_to_rgb(h/360, 1., 1.)
+    elif color == 'bw':
+        # convert val in range minval..maxval to the range 0..100 degrees which
+        # correspond to the values black..white in the HSV colorspace
+        v = (float(val-minval) / (maxval-minval)) * 100
+        # convert hsv color (1,0,v) to its rgb equivalent
+        # [NOTE]: hsv_to_rgb() function expects h to be 0..1 not 0..100
+        r, g, b = colorsys.hsv_to_rgb(1, 0, 1-(v/100))
+    else:
+        raise ValueError('[BUG]: Color option must be "rg" or "bw"')
+
     # returning RGB in range 0..255
     rgb_hex = '#%02x%02x%02x' % (r*255, g*255, b*255)
     return rgb_hex
@@ -250,7 +263,7 @@ def create_graph(relationships, limits, color):
                 edge.attr['len'] = 1
 
                 if color:
-                    edge.attr['color'] = pseudocolor(edge_width)
+                    edge.attr['color'] = pseudocolor(edge_width, color)
 
 
 #    G.layout(prog = 'fdp')
@@ -271,7 +284,6 @@ def main():
     options = _get_options()
     if options.verbosity:
         log.info('START "' + get_time() + '"')
-#        print 'Options parsed: ' + str(options)
         log.debug('Options parsed: "' + str(options) + '"')
 
     # Parsing input file
